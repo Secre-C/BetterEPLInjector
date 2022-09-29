@@ -14,12 +14,12 @@ namespace BetterEPLInjector
             }
             foreach (string arg in args)
             {
-                FileInfo argInfo = new FileInfo(arg);
-                if (argInfo.Extension == ".EPL" || argInfo.Extension == ".BCD")
+                //FileInfo argInfo = new FileInfo(arg);
+                if (Path.GetExtension(arg) == ".EPL" || Path.GetExtension(arg) == ".BCD")
                 {
                     ExtractEPL(arg);
                 }
-                else if (argInfo.Extension == "")
+                else if (Path.GetExtension(arg) == "")
                 {
                     InjectEPL(arg);
                 }
@@ -40,12 +40,14 @@ namespace BetterEPLInjector
         static void InjectEPL(string InputDir)
         {
             Console.WriteLine("Directory detected, looking for models to inject...\n");
+            List<string> gmdFileList = new();
+            List<EplContents> EplContentList = new();
             foreach (string gmdFiles in Directory.GetFiles(InputDir))
             {
-                FileInfo fileInfo = new(gmdFiles);
-                if (fileInfo.Extension == ".GMD")
+                //FileInfo fileInfo = new(gmdFiles);
+                if (Path.GetExtension(gmdFiles) == ".GMD")
                 {
-                    Console.WriteLine(gmdFiles);
+                    gmdFileList.Add(gmdFiles);
                 }
             }
             return;
