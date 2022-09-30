@@ -271,7 +271,7 @@ namespace BetterEPLInjector
                 var (name1, offset1, size1) = modelEntryList[i];
                 if (offset0 + size0 > offset1)
                 {
-                    modelEntryList.RemoveAt(i);
+                    modelEntryList.RemoveAt(i); //prevents files embedded in an embedded epl from being extracted
                     i -= 1;
                 }
             }
