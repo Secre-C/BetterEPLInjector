@@ -5,11 +5,15 @@
     <TargetFramework>net6.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
     <Reference Include="Amicitia.IO">
       <HintPath>D:\Github\Amicitia.IO\src\Amicitia.IO\bin\Release\netstandard2.1\Amicitia.IO.dll</HintPath>
+    </Reference>
+    <Reference Include="GFDLibrary">
+      <HintPath>D:\Github\GFD-Studio\GFDStudio\bin\Release\net5.0-windows\GFDLibrary.dll</HintPath>
     </Reference>
   </ItemGroup>
 
