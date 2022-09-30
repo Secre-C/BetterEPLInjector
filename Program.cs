@@ -139,7 +139,44 @@ namespace BetterEPLInjector
                 }
                 else
                 {
-                    Console.WriteLine($"Can't Find {name}, Skipping...");
+                    Console.WriteLine($"Can't Find {name}, Using Embed from Source...");
+                    using (ResourceReader eplFile = new ResourceReader(new MemoryStream(eplBytes), false))
+                    {
+                        using (var stream = File.Open($"{outputEPL}_temp", FileMode.Open))
+                        {
+                            using (BinaryWriter newEplFile = new BinaryWriter(stream))
+                            {
+                                long currentOffset = 0;
+                                if (index != 0)
+                                {
+                                    var (name1, offset1, size1) = modelEntryList[index - 1];
+                                    currentOffset = offset1 + size1;
+                                    eplFile.Seek((int)currentOffset, SeekOrigin.Begin);
+                                }
+                                else
+                                {
+                                    eplFile.Seek(0, SeekOrigin.Begin);
+                                }
+                                newEplFile.Seek(0, SeekOrigin.End);
+                                newEplFile.Write(eplFile.ReadBytes((int)offset - (int)currentOffset));
+                                newEplFile.Close();
+                            }
+                        }
+                    }
+
+                    using (ResourceReader eplFile = new ResourceReader(new MemoryStream(eplBytes), false))
+                    {
+                        using (var stream = File.Open($"{outputEPL}_temp", FileMode.Open))
+                        {
+                            using (BinaryWriter newEplFile = new BinaryWriter(stream))
+                            {
+                                eplFile.Seek(offset, SeekOrigin.Begin);
+                                newEplFile.Seek(0, SeekOrigin.End);
+                                newEplFile.Write(eplFile.ReadBytes((int)size));
+                                newEplFile.Close();
+                            }
+                        }
+                    }
                 }
                 index++;
             }
@@ -168,9 +205,9 @@ namespace BetterEPLInjector
             else
             {
                 Console.WriteLine("Finished Injecting Files!\n");
-                File.Copy($"{outputEPL}_temp", outputEPL, true);
-                File.Delete($"{outputEPL}_temp");
             }
+            File.Copy($"{outputEPL}_temp", outputEPL, true);
+            File.Delete($"{outputEPL}_temp");
             return;
         }
 
@@ -198,7 +235,6 @@ namespace BetterEPLInjector
                     break;
                 }
                 offsets.Add(embedOffset);
-                //Console.WriteLine(embedOffset);
                 currentOffset = embedOffset + 4;
             }
 
@@ -208,21 +244,22 @@ namespace BetterEPLInjector
                 {
                     eplFile.Endianness = Endianness.BigEndian;
                     eplFile.Seek(entry - 4, SeekOrigin.Begin);
-                    var dataLength = eplFile.ReadUInt32();
+                    var dataLength = eplFile.ReadUInt32(); //retrieve embed filesize
                     byte stringNull;
+
                     eplFile.Seek(entry - 17, SeekOrigin.Begin);
                     currentOffset = 0;
-                    //Console.WriteLine("before {0}", eplFile.Position);
+
                     do
                     {
                         eplFile.Seek(entry - 17 + currentOffset, SeekOrigin.Begin);
-                        //Console.WriteLine("during {0}", eplFile.Position);
                         stringNull = eplFile.ReadByte();
                         currentOffset -= 1;
-                    } while (stringNull != 0);
-                    //Console.WriteLine("after {0}", eplFile.Position);
+                    } while (stringNull != 0); //find beginning of embed file name
+
                     int stringLength = eplFile.ReadByte();
                     string embedName = eplFile.ReadString(stringLength);
+
                     modelEntryList.Add((embedName, entry, dataLength));
                 };
 
