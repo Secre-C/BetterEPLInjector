@@ -1,5 +1,6 @@
 ﻿using GFDLibrary.IO;
 using GFDLibrary.IO.Common;
+using System.Text;
 
 namespace BetterEPLInjector
 {
@@ -9,7 +10,7 @@ namespace BetterEPLInjector
         {
             if (args.Length == 0)
             {
-                Console.WriteLine("Drag an EPL/BED to extract, or a directory to inject\n");
+                Console.WriteLine("Drag an EPL, BED, EPT, or EPD to extract, or a directory to inject\n");
                 return;
             }
             else
@@ -18,27 +19,31 @@ namespace BetterEPLInjector
                 {
                     if (Path.GetExtension(arg) == ".EPL" || Path.GetExtension(arg) == ".BED")
                     {
-                        ExtractEPL(arg);
+                        Extract(arg, "GFS0");
+                    }
+                    else if (Path.GetExtension(arg) == ".EPT" || Path.GetExtension(arg) == ".EPD")
+                    {
+                        Extract(arg, "DDS ");
                     }
                     else if (Path.GetExtension(arg) == "")
                     {
-                        InjectEPL(arg);
+                        Inject(arg);
                     }
                     else
                     {
-                        Console.WriteLine("Invalid Input. Drag an EPL/BED to extract, or a directory to inject\n");
+                        Console.WriteLine("Invalid Input. Drag an EPL, BED, or EPT to extract, or a directory to inject\n");
                     }
                 }
             }
         }
 
-        static void ExtractEPL(string inputEPL)
+        static void Extract(string inputEPL, string magic)
         {
-            Console.WriteLine("EPL detected, looking for embeds to extract...\n");
+            Console.WriteLine($"{Path.GetExtension(inputEPL)} detected, looking for embeds to extract...\n");
             string newEPLDir = $"{Path.GetDirectoryName(inputEPL)}\\{Path.GetFileNameWithoutExtension(inputEPL)}";
 
             byte[] eplBytes = File.ReadAllBytes(inputEPL);
-            List < (string modelName, long modelOffset, long modelSize) > modelEntryList = FindEmbeddedModels(eplBytes);
+            List < (string modelName, long modelOffset, long modelSize) > modelEntryList = FindEmbeddedModels(eplBytes, magic);
 
             if (modelEntryList == null) return;
 
@@ -52,9 +57,9 @@ namespace BetterEPLInjector
 
                 using (var stream = File.Open(newEmbedPath, FileMode.Create))
                 {
-                    using (ResourceReader eplFile = new ResourceReader(new MemoryStream(eplBytes), false))
+                    using (ResourceReader eplFile = new(new MemoryStream(eplBytes), false))
                     {
-                        using (BinaryWriter eplEmbedFile = new BinaryWriter(stream))
+                        using (BinaryWriter eplEmbedFile = new(stream))
                         {
                             eplFile.Seek(offset, SeekOrigin.Begin);
                             eplEmbedFile.Write(eplFile.ReadBytes((int)size));
@@ -66,9 +71,11 @@ namespace BetterEPLInjector
             
             return;
         }
-        static void InjectEPL(string inputDir)
+        static void Inject(string inputDir)
         {
             Console.WriteLine("Directory detected, looking for embeds to inject...\n");
+            string magic = "GFS0";
+
             string outputEPL = inputDir + ".EPL";
 
             if (!File.Exists(outputEPL))
@@ -76,15 +83,22 @@ namespace BetterEPLInjector
                 outputEPL = inputDir + ".BED";
                 if (!File.Exists(outputEPL))
                 {
-                    Console.WriteLine("Can't find EPL/BED to inject: {0}\n", Path.GetFileNameWithoutExtension(outputEPL));
-                    return;
+                    outputEPL = inputDir + ".EPT";
+                    magic = "DDS ";
+                    if (!File.Exists(outputEPL))
+                    {
+                        outputEPL = inputDir + ".EPD";
+                        if (!File.Exists(outputEPL))
+                        {
+                            Console.WriteLine("Can't find file to inject: {0}\n", Path.GetFileNameWithoutExtension(outputEPL));
+                            return;
+                        }
+                    }
                 }
             }
 
-            List<string> embedFileList = new();
-
             byte[] eplBytes = File.ReadAllBytes(outputEPL);
-            List<(string modelName, long modelOffset, long modelSize)> modelEntryList = FindEmbeddedModels(eplBytes);
+            List<(string modelName, long modelOffset, long modelSize)> modelEntryList = FindEmbeddedModels(eplBytes, magic);
             bool injectedFiles = false;
             int index = 0;
 
@@ -100,11 +114,11 @@ namespace BetterEPLInjector
                     Console.WriteLine($"Injecting {name}");
                     byte[] embedBytes = File.ReadAllBytes(embedFileDirectory);
 
-                    using (ResourceReader eplFile = new ResourceReader(new MemoryStream(eplBytes), false))
+                    using (ResourceReader eplFile = new(new MemoryStream(eplBytes), false))
                     {
                         using (var stream = File.Open($"{outputEPL}_temp", FileMode.Open))
                         {
-                            using (BinaryWriter newEplFile = new BinaryWriter(stream))
+                            using (BinaryWriter newEplFile = new (stream))
                             {
                                 long currentOffset = 0;
                                 if (index != 0)
@@ -124,9 +138,9 @@ namespace BetterEPLInjector
                         }
                     }
 
-                    using (ResourceReader embedFile = new ResourceReader(new MemoryStream(embedBytes), false))
+                    using (ResourceReader embedFile = new (new MemoryStream(embedBytes), false))
                     {
-                        using (ResourceWriter newEplFile = new ResourceWriter(File.Open($"{outputEPL}_temp", FileMode.Open), false))
+                        using (ResourceWriter newEplFile = new (File.Open($"{outputEPL}_temp", FileMode.Open), false))
                         {
                             newEplFile.Endianness = Endianness.BigEndian;
                             newEplFile.SeekEnd(0);
@@ -140,11 +154,11 @@ namespace BetterEPLInjector
                 else
                 {
                     Console.WriteLine($"Can't Find {name}, Using Embed from Source...");
-                    using (ResourceReader eplFile = new ResourceReader(new MemoryStream(eplBytes), false))
+                    using (ResourceReader eplFile = new (new MemoryStream(eplBytes), false))
                     {
                         using (var stream = File.Open($"{outputEPL}_temp", FileMode.Open))
                         {
-                            using (BinaryWriter newEplFile = new BinaryWriter(stream))
+                            using (BinaryWriter newEplFile = new (stream))
                             {
                                 long currentOffset = 0;
                                 if (index != 0)
@@ -164,11 +178,11 @@ namespace BetterEPLInjector
                         }
                     }
 
-                    using (ResourceReader eplFile = new ResourceReader(new MemoryStream(eplBytes), false))
+                    using (ResourceReader eplFile = new (new MemoryStream(eplBytes), false))
                     {
                         using (var stream = File.Open($"{outputEPL}_temp", FileMode.Open))
                         {
-                            using (BinaryWriter newEplFile = new BinaryWriter(stream))
+                            using (BinaryWriter newEplFile = new (stream))
                             {
                                 eplFile.Seek(offset, SeekOrigin.Begin);
                                 newEplFile.Seek(0, SeekOrigin.End);
@@ -181,13 +195,13 @@ namespace BetterEPLInjector
                 index++;
             }
 
-            using (ResourceReader eplFile = new ResourceReader(new MemoryStream(eplBytes), false)) //write until EOF
+            using (ResourceReader eplFile = new (new MemoryStream(eplBytes), false)) //write until EOF
             {
                 var (name, offset, size) = modelEntryList[modelEntryList.Count - 1];
                 
                 using (var stream = File.Open($"{outputEPL}_temp", FileMode.Open))
                 {
-                    using (BinaryWriter newEplFile = new BinaryWriter(stream))
+                    using (BinaryWriter newEplFile = new(stream))
                     {
                         long setOffset = offset + size;
                         eplFile.Seek(setOffset, SeekOrigin.Begin);
@@ -211,16 +225,19 @@ namespace BetterEPLInjector
             return;
         }
 
-        static List<(string modelName, long modelOffset, long modelSize)> FindEmbeddedModels(byte[] eplBytes)
+        static List<(string modelName, long modelOffset, long modelSize)> FindEmbeddedModels(byte[] eplBytes, string magic)
         {
             List<(string modelName, long modelOffset, long modelSize)> modelEntryList = new();
             var offsets = new List<long>();
-            byte[] magic = { 0x47, 0x46, 0x53, 0x30 };
+
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+            byte[] magicBytes = Encoding.GetEncoding(932).GetBytes(magic);
+
             long currentOffset = 4;
 
             while (true)
             {
-                var embedOffset = IndexOf(eplBytes, magic, currentOffset);
+                var embedOffset = IndexOf(eplBytes, magicBytes, currentOffset);
                 if (embedOffset == -1)
                 {
                     if (offsets.Count == 0)
@@ -240,7 +257,7 @@ namespace BetterEPLInjector
 
             foreach (var entry in offsets)
             {
-                using (ResourceReader eplFile = new ResourceReader(new MemoryStream(eplBytes), false))
+                using (ResourceReader eplFile = new(new MemoryStream(eplBytes), false))
                 {
                     eplFile.Endianness = Endianness.BigEndian;
                     eplFile.Seek(entry - 4, SeekOrigin.Begin);
@@ -271,7 +288,7 @@ namespace BetterEPLInjector
                 var (name1, offset1, size1) = modelEntryList[i];
                 if (offset0 + size0 > offset1)
                 {
-                    modelEntryList.RemoveAt(i); //prevents files embedded in an embedded epl from being extracted
+                    modelEntryList.RemoveAt(i); //prevents files embedded in embeds from being extracted
                     i -= 1;
                 }
             }

@@ -9,6 +9,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="System.Text.Encoding.CodePages" Version="6.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Reference Include="GFDLibrary">
       <HintPath>D:\Github\GFD-Studio\GFDStudio\bin\Release\net5.0-windows\GFDLibrary.dll</HintPath>
     </Reference>
