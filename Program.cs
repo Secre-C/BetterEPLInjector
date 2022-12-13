@@ -17,11 +17,11 @@ namespace BetterEPLInjector
             {
                 foreach (string arg in args)
                 {
-                    if (Path.GetExtension(arg) == ".EPL" || Path.GetExtension(arg) == ".BED")
+                    if (Path.GetExtension(arg).ToLower() == ".epl" || Path.GetExtension(arg).ToLower() == ".bed")
                     {
                         Extract(arg, "GFS0");
                     }
-                    else if (Path.GetExtension(arg) == ".EPT" || Path.GetExtension(arg) == ".EPD")
+                    else if (Path.GetExtension(arg).ToLower() == ".ept" || Path.GetExtension(arg).ToLower() == ".epd")
                     {
                         Extract(arg, "DDS ");
                     }
