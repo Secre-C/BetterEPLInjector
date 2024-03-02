@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "BetterEPLInjector": {
+      "commandName": "Project",
+      "commandLineArgs": "\"E:\\ModsnStuff\\P5R Modding real\\steam files\\BASE.CPK_unpacked\\BATTLE\\EFFECT\\BES_TRAN4_UNSTABLE.EPL\""
+    }
+  }
+}

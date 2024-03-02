@@ -1,4 +1,7 @@
-﻿using GFDLibrary.IO;
+﻿using GFDLibrary;
+using GFDLibrary.Models;
+using GFDLibrary.Effects;
+using GFDLibrary.IO;
 using GFDLibrary.IO.Common;
 using System.Text;
 
@@ -15,6 +18,12 @@ namespace BetterEPLInjector
             }
             else
             {
+                foreach (string arg in args)
+                {
+                    ExtractEffectFileEmbeds(arg);
+                }
+
+                return;
                 foreach (string arg in args)
                 {
                     if (Path.GetExtension(arg).ToLower() == ".epl" || Path.GetExtension(arg).ToLower() == ".bed")
@@ -37,13 +46,59 @@ namespace BetterEPLInjector
             }
         }
 
+        static void ExtractEffectFileEmbeds(string filePath)
+        {
+            var node = GetRootNodeFromFile(filePath);
+            var folder = Path.GetDirectoryName(filePath);
+
+            void ExtractEffectsFromNodes(Node node)
+            {
+                if (node.HasAttachments)
+                {
+                    // Loop through nodes and find epl or model attachments
+                    foreach (var attachment in node.Attachments)
+                    {
+                        attachment.GetValue().Save(Path.Join(folder, node.Name));
+                    }
+                }
+
+                if (node.HasChildren)
+                {
+                    foreach (var child in node.Children)
+                    {
+                        ExtractEffectsFromNodes(child);
+                    }
+                }
+            }
+
+            ExtractEffectsFromNodes(node);
+        }
+
+        static Node GetRootNodeFromFile(string filePath)
+        {
+            var ext = Path.GetExtension(filePath).ToLower();
+
+            if (ext == ".epl")
+            {
+                var epl = Resource.Load<Epl>(filePath);
+                return epl?.RootNode;
+            }
+            else if (ext == ".gfs" || ext == ".gmd")
+            {
+                var model = Resource.Load<ModelPack>(filePath);
+                return model.Model.RootNode;
+            }
+
+            throw new($"Invalid Extension \"{ext}\"");
+        }
+
         static void Extract(string inputEPL, string magic)
         {
             Console.WriteLine($"{Path.GetExtension(inputEPL)} detected, looking for embeds to extract...\n");
             string newEPLDir = $"{Path.GetDirectoryName(inputEPL)}\\{Path.GetFileNameWithoutExtension(inputEPL)}";
 
             byte[] eplBytes = File.ReadAllBytes(inputEPL);
-            List < (string modelName, long modelOffset, long modelSize) > modelEntryList = FindEmbeddedModels(eplBytes, magic);
+            List<(string modelName, long modelOffset, long modelSize)> modelEntryList = FindEmbeddedModels(eplBytes, magic);
 
             if (modelEntryList == null) return;
 
@@ -68,9 +123,10 @@ namespace BetterEPLInjector
                 }
                 Console.WriteLine($"Extracted {name}");
             }
-            
+
             return;
         }
+
         static void Inject(string inputDir)
         {
             Console.WriteLine("Directory detected, looking for embeds to inject...\n");
@@ -118,7 +174,7 @@ namespace BetterEPLInjector
                     {
                         using (var stream = File.Open($"{outputEPL}_temp", FileMode.Open))
                         {
-                            using (BinaryWriter newEplFile = new (stream))
+                            using (BinaryWriter newEplFile = new(stream))
                             {
                                 long currentOffset = 0;
                                 if (index != 0)
@@ -138,9 +194,9 @@ namespace BetterEPLInjector
                         }
                     }
 
-                    using (ResourceReader embedFile = new (new MemoryStream(embedBytes), false))
+                    using (ResourceReader embedFile = new(new MemoryStream(embedBytes), false))
                     {
-                        using (ResourceWriter newEplFile = new (File.Open($"{outputEPL}_temp", FileMode.Open), false))
+                        using (ResourceWriter newEplFile = new(File.Open($"{outputEPL}_temp", FileMode.Open), false))
                         {
                             newEplFile.Endianness = Endianness.BigEndian;
                             newEplFile.SeekEnd(0);
@@ -154,11 +210,11 @@ namespace BetterEPLInjector
                 else
                 {
                     Console.WriteLine($"Can't Find {name}, Using Embed from Source...");
-                    using (ResourceReader eplFile = new (new MemoryStream(eplBytes), false))
+                    using (ResourceReader eplFile = new(new MemoryStream(eplBytes), false))
                     {
                         using (var stream = File.Open($"{outputEPL}_temp", FileMode.Open))
                         {
-                            using (BinaryWriter newEplFile = new (stream))
+                            using (BinaryWriter newEplFile = new(stream))
                             {
                                 long currentOffset = 0;
                                 if (index != 0)
@@ -178,11 +234,11 @@ namespace BetterEPLInjector
                         }
                     }
 
-                    using (ResourceReader eplFile = new (new MemoryStream(eplBytes), false))
+                    using (ResourceReader eplFile = new(new MemoryStream(eplBytes), false))
                     {
                         using (var stream = File.Open($"{outputEPL}_temp", FileMode.Open))
                         {
-                            using (BinaryWriter newEplFile = new (stream))
+                            using (BinaryWriter newEplFile = new(stream))
                             {
                                 eplFile.Seek(offset, SeekOrigin.Begin);
                                 newEplFile.Seek(0, SeekOrigin.End);
@@ -195,10 +251,10 @@ namespace BetterEPLInjector
                 index++;
             }
 
-            using (ResourceReader eplFile = new (new MemoryStream(eplBytes), false)) //write until EOF
+            using (ResourceReader eplFile = new(new MemoryStream(eplBytes), false)) //write until EOF
             {
                 var (name, offset, size) = modelEntryList[modelEntryList.Count - 1];
-                
+
                 using (var stream = File.Open($"{outputEPL}_temp", FileMode.Open))
                 {
                     using (BinaryWriter newEplFile = new(stream))
