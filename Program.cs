@@ -1,5 +1,8 @@
-﻿using GFDLibrary.IO;
+﻿using GFDLibrary.Effects;
+using GFDLibrary.IO;
 using GFDLibrary.IO.Common;
+using System.IO;
+using System.Reflection.PortableExecutable;
 using System.Text;
 
 namespace BetterEPLInjector
@@ -15,19 +18,15 @@ namespace BetterEPLInjector
             }
             else
             {
-                foreach (string arg in args)
+                foreach (var arg in args)
                 {
-                    if (Path.GetExtension(arg).ToLower() == ".epl" || Path.GetExtension(arg).ToLower() == ".bed")
+                    if (File.Exists(arg))
                     {
-                        Extract(arg, "GFS0");
+                        ExtractEffectEmbeds(arg, Path.Join(Path.GetDirectoryName(arg), Path.GetFileNameWithoutExtension(arg)));
                     }
-                    else if (Path.GetExtension(arg).ToLower() == ".ept" || Path.GetExtension(arg).ToLower() == ".epd")
+                    else if (Directory.Exists(arg))
                     {
-                        Extract(arg, "DDS ");
-                    }
-                    else if (Path.GetExtension(arg) == "")
-                    {
-                        Inject(arg);
+                        InjectEffectEmbeds(arg);
                     }
                     else
                     {
@@ -37,263 +36,191 @@ namespace BetterEPLInjector
             }
         }
 
-        static void Extract(string inputEPL, string magic)
+        static void ExtractEffectEmbeds(string inputEPL, string outputFolder)
         {
-            Console.WriteLine($"{Path.GetExtension(inputEPL)} detected, looking for embeds to extract...\n");
-            string newEPLDir = $"{Path.GetDirectoryName(inputEPL)}\\{Path.GetFileNameWithoutExtension(inputEPL)}";
+            string magic = string.Empty;
+            var extension = Path.GetExtension(inputEPL).ToLower();
 
-            byte[] eplBytes = File.ReadAllBytes(inputEPL);
-            List < (string modelName, long modelOffset, long modelSize) > modelEntryList = FindEmbeddedModels(eplBytes, magic);
-
-            if (modelEntryList == null) return;
-
-            Directory.CreateDirectory(newEPLDir);
-
-            foreach (var modelEntry in modelEntryList)
+            if (extension == ".epl" || extension == ".bed") magic = "GFS0";
+            else if (extension == ".ept" || extension == ".epd") magic = "DDS ";
+            else
             {
-                var (name, offset, size) = modelEntry;
-                string newEmbedPath = $"{newEPLDir}\\{name}";
+                Console.WriteLine("Invalid filetype");
+                return;
+            }
+
+            Console.WriteLine($"{Path.GetExtension(inputEPL)} detected, looking for embeds to extract...\n");
+
+            var eplBytes = File.ReadAllBytes(inputEPL);
+            var foundEmbeds = TryFindEmbeds(eplBytes, magic, out var modelEntryList);
+
+            if (!foundEmbeds)
+            {
+                Console.WriteLine("Couldn't find any embeds.");
+                return;
+            }
+
+            foreach (var (name, offset, size) in modelEntryList)
+            {
+                string newEmbedPath = Path.Join(outputFolder, name);
                 Directory.CreateDirectory(Path.GetDirectoryName(newEmbedPath));
 
                 using (var stream = File.Open(newEmbedPath, FileMode.Create))
                 {
-                    using (ResourceReader eplFile = new(new MemoryStream(eplBytes), false))
-                    {
-                        using (BinaryWriter eplEmbedFile = new(stream))
-                        {
-                            eplFile.Seek(offset, SeekOrigin.Begin);
-                            eplEmbedFile.Write(eplFile.ReadBytes((int)size));
-                        }
-                    }
+                    stream.Write(eplBytes[offset..(offset + size)]);
                 }
+
                 Console.WriteLine($"Extracted {name}");
+            }
+
+            foreach (var nestedFile in Directory.GetFiles(outputFolder))
+            {
+                ExtractEffectEmbeds(nestedFile, Path.Join(outputFolder, Path.GetFileNameWithoutExtension(nestedFile)));
             }
             
             return;
         }
-        static void Inject(string inputDir)
+
+        static bool InjectEffectEmbeds(string extractedFiles)
         {
-            Console.WriteLine("Directory detected, looking for embeds to inject...\n");
-            string magic = "GFS0";
+            Console.WriteLine("Looking for embeds to inject...\n");
 
-            string outputEPL = inputDir + ".EPL";
+            var nestedFiles = Directory.GetDirectories(extractedFiles);
 
-            if (!File.Exists(outputEPL))
+            var foundFile = TryFindOriginalResourceFile(extractedFiles, out var outputResource, out var magic);
+
+            if (!foundFile)
             {
-                outputEPL = inputDir + ".BED";
-                if (!File.Exists(outputEPL))
-                {
-                    outputEPL = inputDir + ".EPT";
-                    magic = "DDS ";
-                    if (!File.Exists(outputEPL))
-                    {
-                        outputEPL = inputDir + ".EPD";
-                        if (!File.Exists(outputEPL))
-                        {
-                            Console.WriteLine("Can't find file to inject: {0}\n", Path.GetFileNameWithoutExtension(outputEPL));
-                            return;
-                        }
-                    }
-                }
+                Console.WriteLine($"Cannot find resource file: {extractedFiles}.XXX");
+                return false;
+            };
+
+            // Recursively inject nested files
+            foreach (var nestedFile in nestedFiles)
+            {
+                InjectEffectEmbeds(nestedFile);
             }
 
-            byte[] eplBytes = File.ReadAllBytes(outputEPL);
-            List<(string modelName, long modelOffset, long modelSize)> modelEntryList = FindEmbeddedModels(eplBytes, magic);
-            bool injectedFiles = false;
-            int index = 0;
+            byte[] eplBytes = File.ReadAllBytes(outputResource);
+            var foundEmbeds = TryFindEmbeds(eplBytes, magic, out var modelEntryList);
 
-            File.Delete($"{outputEPL}_temp");
-            File.Create($"{outputEPL}_temp").Close();
-
-            foreach (var modelEntry in modelEntryList)
+            if (!foundEmbeds)
             {
-                var (name, offset, size) = modelEntry;
-                string embedFileDirectory = $"{inputDir}\\{name}";
-                if (File.Exists(embedFileDirectory))
+                Console.WriteLine("Couldn't find embeds in original file.");
+                return false;
+            }
+
+            int currentOffset = 0;
+
+            var outputFileStream = File.Create(outputResource);
+            var outputFileWriter = new EndianBinaryWriter(outputFileStream, Endianness.BigEndian);
+
+            try
+            {
+                foreach (var (name, offset, size) in modelEntryList)
                 {
+                    string embedFileDirectory = $"{extractedFiles}\\{name}";
+
+                    if (!File.Exists(embedFileDirectory))
+                    {
+                        Console.WriteLine($"Missing embed file: {embedFileDirectory}, using source file");
+                        continue;
+                    }
+
                     Console.WriteLine($"Injecting {name}");
-                    byte[] embedBytes = File.ReadAllBytes(embedFileDirectory);
 
-                    using (ResourceReader eplFile = new(new MemoryStream(eplBytes), false))
-                    {
-                        using (var stream = File.Open($"{outputEPL}_temp", FileMode.Open))
-                        {
-                            using (BinaryWriter newEplFile = new (stream))
-                            {
-                                long currentOffset = 0;
-                                if (index != 0)
-                                {
-                                    var (name1, offset1, size1) = modelEntryList[index - 1];
-                                    currentOffset = offset1 + size1;
-                                    eplFile.Seek((int)currentOffset, SeekOrigin.Begin);
-                                }
-                                else
-                                {
-                                    eplFile.Seek(0, SeekOrigin.Begin);
-                                }
-                                newEplFile.Seek(0, SeekOrigin.End);
-                                newEplFile.Write(eplFile.ReadBytes((int)offset - 4 - (int)currentOffset));
-                                newEplFile.Close();
-                            }
-                        }
-                    }
+                    // Write bytes up to embed
+                    outputFileStream.Write(eplBytes[currentOffset..(offset - 4)]);
 
-                    using (ResourceReader embedFile = new (new MemoryStream(embedBytes), false))
-                    {
-                        using (ResourceWriter newEplFile = new (File.Open($"{outputEPL}_temp", FileMode.Open), false))
-                        {
-                            newEplFile.Endianness = Endianness.BigEndian;
-                            newEplFile.SeekEnd(0);
-                            newEplFile.Write(embedBytes.Length);
-                            newEplFile.Write(embedBytes);
-                            newEplFile.Close();
-                        }
-                    }
-                    injectedFiles = true;
+                    // Write embed data
+                    var embedBytes = File.ReadAllBytes(embedFileDirectory);
+                    outputFileWriter.Write(embedBytes.Length);
+                    outputFileWriter.Write(embedBytes);
+
+                    currentOffset = offset + size;
                 }
-                else
-                {
-                    Console.WriteLine($"Can't Find {name}, Using Embed from Source...");
-                    using (ResourceReader eplFile = new (new MemoryStream(eplBytes), false))
-                    {
-                        using (var stream = File.Open($"{outputEPL}_temp", FileMode.Open))
-                        {
-                            using (BinaryWriter newEplFile = new (stream))
-                            {
-                                long currentOffset = 0;
-                                if (index != 0)
-                                {
-                                    var (name1, offset1, size1) = modelEntryList[index - 1];
-                                    currentOffset = offset1 + size1;
-                                    eplFile.Seek((int)currentOffset, SeekOrigin.Begin);
-                                }
-                                else
-                                {
-                                    eplFile.Seek(0, SeekOrigin.Begin);
-                                }
-                                newEplFile.Seek(0, SeekOrigin.End);
-                                newEplFile.Write(eplFile.ReadBytes((int)offset - (int)currentOffset));
-                                newEplFile.Close();
-                            }
-                        }
-                    }
 
-                    using (ResourceReader eplFile = new (new MemoryStream(eplBytes), false))
-                    {
-                        using (var stream = File.Open($"{outputEPL}_temp", FileMode.Open))
-                        {
-                            using (BinaryWriter newEplFile = new (stream))
-                            {
-                                eplFile.Seek(offset, SeekOrigin.Begin);
-                                newEplFile.Seek(0, SeekOrigin.End);
-                                newEplFile.Write(eplFile.ReadBytes((int)size));
-                                newEplFile.Close();
-                            }
-                        }
-                    }
-                }
-                index++;
+                outputFileStream.Write(eplBytes[currentOffset..]);
+            }
+            finally
+            {
+                outputFileStream.Close();
+                outputFileWriter.Close();
             }
 
-            using (ResourceReader eplFile = new (new MemoryStream(eplBytes), false)) //write until EOF
-            {
-                var (name, offset, size) = modelEntryList[modelEntryList.Count - 1];
-                
-                using (var stream = File.Open($"{outputEPL}_temp", FileMode.Open))
-                {
-                    using (BinaryWriter newEplFile = new(stream))
-                    {
-                        long setOffset = offset + size;
-                        eplFile.Seek(setOffset, SeekOrigin.Begin);
-                        newEplFile.Seek(0, SeekOrigin.End);
-                        newEplFile.Write(eplFile.ReadBytes(eplBytes.Length - (int)setOffset));
-                        newEplFile.Close();
-                    }
-                }
-            }
-
-            if (injectedFiles == false)
-            {
-                Console.WriteLine("No Files Injected\n");
-            }
-            else
-            {
-                Console.WriteLine("Finished Injecting Files!\n");
-            }
-            File.Copy($"{outputEPL}_temp", outputEPL, true);
-            File.Delete($"{outputEPL}_temp");
-            return;
+            return true;
         }
 
-        static List<(string modelName, long modelOffset, long modelSize)> FindEmbeddedModels(byte[] eplBytes, string magic)
+        static bool TryFindEmbeds(byte[] data, string magic, out List<(string modelName, int modelOffset, int modelSize)> modelEntryList)
         {
-            List<(string modelName, long modelOffset, long modelSize)> modelEntryList = new();
-            var offsets = new List<long>();
+            modelEntryList = [];
 
             Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
-            byte[] magicBytes = Encoding.GetEncoding(932).GetBytes(magic);
 
             long currentOffset = 4;
 
-            while (true)
+            var resourceStream = new MemoryStream(data);
+            var resourceReader = new EndianBinaryReader(resourceStream, Encoding.GetEncoding(932), Endianness.BigEndian);
+
+            try
             {
-                var embedOffset = IndexOf(eplBytes, magicBytes, currentOffset);
-                if (embedOffset == -1)
+                while (true)
                 {
-                    if (offsets.Count == 0)
+                    var embedOffset = (int)IndexOf(data, Encoding.ASCII.GetBytes(magic), currentOffset);
+
+                    if (embedOffset == -1)
                     {
-                        Console.WriteLine("No Embeds Found!\n");
-                        return null;
+                        return modelEntryList.Count != 0;
                     }
-                    else
+
+                    // Position stream at the embed size value
+                    resourceStream.Position = embedOffset - 4;
+                    var embedSize = resourceReader.ReadInt32();
+
+                    /* Find file name */
+                    byte x;
+
+                    // Move stream to the end of the embed name
+                    resourceStream.Seek(-17, SeekOrigin.Current);
+
+                    while (true)
                     {
-                        Console.WriteLine("Embeds Found...\n");
-                    }
-                    break;
-                }
-                offsets.Add(embedOffset);
-                currentOffset = embedOffset + 4;
-            }
+                        x = (byte)resourceStream.ReadByte();
 
-            foreach (var entry in offsets)
-            {
-                using (ResourceReader eplFile = new(new MemoryStream(eplBytes), false))
-                {
-                    eplFile.Endianness = Endianness.BigEndian;
-                    eplFile.Seek(entry - 4, SeekOrigin.Begin);
-                    var dataLength = eplFile.ReadUInt32(); //retrieve embed filesize
-                    byte stringNull;
+                        if (x == 0) break;
+                        resourceStream.Seek(-2, SeekOrigin.Current);
+                    };
 
-                    eplFile.Seek(entry - 17, SeekOrigin.Begin);
-                    currentOffset = 0;
-
-                    do
-                    {
-                        eplFile.Seek(entry - 17 + currentOffset, SeekOrigin.Begin);
-                        stringNull = eplFile.ReadByte();
-                        currentOffset -= 1;
-                    } while (stringNull != 0); //find beginning of embed file name
-
-                    int stringLength = eplFile.ReadByte();
-                    string embedName = eplFile.ReadString(stringLength);
-
-                    modelEntryList.Add((embedName, entry, dataLength));
-                };
-
-            }
-
-            for (int i = 1; i < modelEntryList.Count; i++)
-            {
-                var (name0, offset0, size0) = modelEntryList[i - 1];
-                var (name1, offset1, size1) = modelEntryList[i];
-                if (offset0 + size0 > offset1)
-                {
-                    modelEntryList.RemoveAt(i); //prevents files embedded in embeds from being extracted
-                    i -= 1;
+                    currentOffset = embedOffset + embedSize;
+                    modelEntryList.Add((resourceReader.ReadString(), embedOffset, embedSize));
                 }
             }
+            finally
+            {
+                resourceStream.Close();
+                resourceReader.Close();
+            }
+        }
 
-            return modelEntryList;
+        static bool TryFindOriginalResourceFile(string extractedFilesDirectory, out string resourceFilePath, out string magicPattern)
+        {
+            (string, string)[] extensions = [(".EPL", "GFS0"), (".BED", "GFS0"), (".EPT", "DDS "), (".EPD", "DDS ")];
+
+            resourceFilePath = string.Empty;
+            magicPattern = string.Empty;
+
+            foreach (var (extension, magic) in extensions)
+            {
+                resourceFilePath = extractedFilesDirectory + extension;
+                magicPattern = magic;
+
+                if (File.Exists(resourceFilePath))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         public static unsafe long IndexOf(byte[] haystack, byte[] needle, long startOffset = 0)
@@ -308,6 +235,5 @@ namespace BetterEPLInjector
                 return -1;
             }
         }
-
     }
 }
