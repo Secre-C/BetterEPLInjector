@@ -1,12 +1,11 @@
-﻿using GFDLibrary.Effects;
-using GFDLibrary.IO;
+﻿using GFDLibrary.Models;
 using GFDLibrary.IO.Common;
-using System.IO;
-using System.Reflection.PortableExecutable;
 using System.Text;
+using GFDLibrary;
 
 namespace BetterEPLInjector
 {
+
     internal class Program
     {
         static void Main(string[] args)
@@ -22,11 +21,12 @@ namespace BetterEPLInjector
                 {
                     if (File.Exists(arg))
                     {
-                        ExtractEffectEmbeds(arg, Path.Join(Path.GetDirectoryName(arg), Path.GetFileNameWithoutExtension(arg)));
+                        ExtractEmbeds(arg, Path.Join(Path.GetDirectoryName(arg), Path.GetFileNameWithoutExtension(arg)));
                     }
                     else if (Directory.Exists(arg))
                     {
-                        InjectEffectEmbeds(arg);
+                        //InjectEffectEmbeds(arg);
+                        ExtractInDirectory(arg, Path.Join(arg, "EPL"));
                     }
                     else
                     {
@@ -36,22 +36,49 @@ namespace BetterEPLInjector
             }
         }
 
-        static void ExtractEffectEmbeds(string inputEPL, string outputFolder)
+        static void ExtractInDirectory(string path, string output)
         {
-            string magic = string.Empty;
-            var extension = Path.GetExtension(inputEPL).ToLower();
+            var files = Directory.GetFiles(path, "*.*", new EnumerationOptions { RecurseSubdirectories = true });
 
+            var _files = files.Where(x => Path.GetExtension(x).Equals(".epl", StringComparison.OrdinalIgnoreCase) ||
+                Path.GetExtension(x).Equals(".bed", StringComparison.OrdinalIgnoreCase) ||
+                Path.GetExtension(x).Equals(".ept", StringComparison.OrdinalIgnoreCase) ||
+                Path.GetExtension(x).Equals(".epd", StringComparison.OrdinalIgnoreCase) ||
+                Path.GetExtension(x).Equals(".gfs", StringComparison.OrdinalIgnoreCase) ||
+                Path.GetExtension(x).Equals(".gmd", StringComparison.OrdinalIgnoreCase)
+            );
+
+            foreach (var file in _files)
+            {
+                try
+                {
+                    ExtractEmbeds(file, output);
+                }
+                catch { Console.WriteLine($"failed to extract {file}"); }
+            }
+        }
+
+        static void ExtractEmbeds(string inputResource, string outputFolder)
+        {
+            var extension = Path.GetExtension(inputResource).ToLower();
+
+            string magic;
             if (extension == ".epl" || extension == ".bed") magic = "GFS0";
             else if (extension == ".ept" || extension == ".epd") magic = "DDS ";
+            else if (extension == ".gfs" || extension == ".gmd")
+            {
+                ExtractEmbedsFromModel(inputResource, outputFolder);
+                return;
+            }
             else
             {
                 Console.WriteLine("Invalid filetype");
                 return;
             }
 
-            Console.WriteLine($"{Path.GetExtension(inputEPL)} detected, looking for embeds to extract...\n");
+            Console.WriteLine($"{Path.GetExtension(inputResource)} detected, looking for embeds to extract...\n");
 
-            var eplBytes = File.ReadAllBytes(inputEPL);
+            var eplBytes = File.ReadAllBytes(inputResource);
             var foundEmbeds = TryFindEmbeds(eplBytes, magic, out var modelEntryList);
 
             if (!foundEmbeds)
@@ -67,21 +94,62 @@ namespace BetterEPLInjector
 
                 using (var stream = File.Open(newEmbedPath, FileMode.Create))
                 {
-                    stream.Write(eplBytes[offset..(offset + size)]);
+                    stream.Write(eplBytes.AsSpan()[offset..(offset + size)]);
                 }
+
+                ExtractEmbeds(newEmbedPath, outputFolder);
 
                 Console.WriteLine($"Extracted {name}");
             }
 
-            foreach (var nestedFile in Directory.GetFiles(outputFolder))
-            {
-                ExtractEffectEmbeds(nestedFile, Path.Join(outputFolder, Path.GetFileNameWithoutExtension(nestedFile)));
-            }
-            
             return;
         }
 
-        static bool InjectEffectEmbeds(string extractedFiles)
+        static void ExtractEmbedsFromModel(string modelPath, string outputFolder)
+        {
+            try
+            {
+                var model = Resource.Load<ModelPack>(modelPath);
+
+                if (model == null || model.Model == null)
+                    return;
+
+                ExtractEplFromModelNode(model.Model.RootNode, outputFolder);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.ToString());
+                Console.WriteLine("Failed to extract model");
+            }
+        }
+
+        static void ExtractEplFromModelNode(Node node, string outputFolder)
+        {
+            foreach (var attachment in node.Attachments)
+            {
+                string outFile;
+
+                if (attachment.Type == NodeAttachmentType.Epl)
+                {
+                    outFile = Path.Join(outputFolder, node.Name + ".EPL");
+                }
+                else if (attachment.Type == NodeAttachmentType.Model)
+                {
+                    outFile = Path.Join(outputFolder, node.Name + ".GMD");
+                }
+                else continue;
+
+                attachment.GetValue().Save(outFile);
+                ExtractEmbeds(outFile, outputFolder);
+            }
+
+            foreach (var child in node.Children)
+            {
+                ExtractEplFromModelNode(child, outputFolder);
+            }
+        }
+
+        static void InjectEffectEmbeds(string extractedFiles)
         {
             Console.WriteLine("Looking for embeds to inject...\n");
 
@@ -92,14 +160,8 @@ namespace BetterEPLInjector
             if (!foundFile)
             {
                 Console.WriteLine($"Cannot find resource file: {extractedFiles}.XXX");
-                return false;
+                return;
             };
-
-            // Recursively inject nested files
-            foreach (var nestedFile in nestedFiles)
-            {
-                InjectEffectEmbeds(nestedFile);
-            }
 
             byte[] eplBytes = File.ReadAllBytes(outputResource);
             var foundEmbeds = TryFindEmbeds(eplBytes, magic, out var modelEntryList);
@@ -107,7 +169,13 @@ namespace BetterEPLInjector
             if (!foundEmbeds)
             {
                 Console.WriteLine("Couldn't find embeds in original file.");
-                return false;
+                return;
+            }
+
+            // Recursively inject nested files
+            foreach (var nestedFile in nestedFiles)
+            {
+                InjectEffectEmbeds(nestedFile);
             }
 
             int currentOffset = 0;
@@ -130,7 +198,7 @@ namespace BetterEPLInjector
                     Console.WriteLine($"Injecting {name}");
 
                     // Write bytes up to embed
-                    outputFileStream.Write(eplBytes[currentOffset..(offset - 4)]);
+                    outputFileStream.Write(eplBytes.AsSpan()[currentOffset..(offset - 4)]);
 
                     // Write embed data
                     var embedBytes = File.ReadAllBytes(embedFileDirectory);
@@ -140,15 +208,13 @@ namespace BetterEPLInjector
                     currentOffset = offset + size;
                 }
 
-                outputFileStream.Write(eplBytes[currentOffset..]);
+                outputFileStream.Write(eplBytes.AsSpan()[currentOffset..]);
             }
             finally
             {
                 outputFileStream.Close();
                 outputFileWriter.Close();
             }
-
-            return true;
         }
 
         static bool TryFindEmbeds(byte[] data, string magic, out List<(string modelName, int modelOffset, int modelSize)> modelEntryList)
@@ -157,7 +223,8 @@ namespace BetterEPLInjector
 
             Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
-            long currentOffset = 4;
+            int currentOffset = 4;
+            var searchPattern = Encoding.ASCII.GetBytes(magic).AsSpan();
 
             var resourceStream = new MemoryStream(data);
             var resourceReader = new EndianBinaryReader(resourceStream, Encoding.GetEncoding(932), Endianness.BigEndian);
@@ -166,16 +233,25 @@ namespace BetterEPLInjector
             {
                 while (true)
                 {
-                    var embedOffset = (int)IndexOf(data, Encoding.ASCII.GetBytes(magic), currentOffset);
+                    var embedOffset = MemoryExtensions.IndexOf(data.AsSpan()[currentOffset..], searchPattern);
 
                     if (embedOffset == -1)
                     {
                         return modelEntryList.Count != 0;
                     }
 
+                    embedOffset += currentOffset;
+
                     // Position stream at the embed size value
                     resourceStream.Position = embedOffset - 4;
                     var embedSize = resourceReader.ReadInt32();
+
+                    // For rare cases that the embeds with extensions GFS are followed by a '0'
+                    if (embedSize > data.Length)
+                    {
+                        currentOffset += 4;
+                        continue;
+                    }
 
                     /* Find file name */
                     byte x;
@@ -221,19 +297,6 @@ namespace BetterEPLInjector
             }
 
             return false;
-        }
-
-        public static unsafe long IndexOf(byte[] haystack, byte[] needle, long startOffset = 0)
-        {
-            fixed (byte* h = haystack)
-            fixed (byte* n = needle)
-            {
-                for (byte* hNext = h + startOffset, hEnd = h + haystack.LongLength + 1 - needle.LongLength, nEnd = n + needle.LongLength; hNext < hEnd; hNext++)
-                    for (byte* hInc = hNext, nInc = n; *nInc == *hInc; hInc++)
-                        if (++nInc == nEnd)
-                            return hNext - h;
-                return -1;
-            }
         }
     }
 }
