@@ -1,13 +1,14 @@
-﻿using GFDLibrary.Models;
+﻿using GFDLibrary;
 using GFDLibrary.IO.Common;
+using GFDLibrary.Models;
 using System.Text;
-using GFDLibrary;
 
 namespace BetterEPLInjector
 {
 
     internal class Program
     {
+        static StreamWriter? logStream = null;
         static void Main(string[] args)
         {
             if (args.Length == 0)
@@ -25,8 +26,8 @@ namespace BetterEPLInjector
                     }
                     else if (Directory.Exists(arg))
                     {
-                        //InjectEffectEmbeds(arg);
-                        ExtractInDirectory(arg, Path.Join(arg, "EPL"));
+                        InjectEmbeds(arg);
+                        //ExtractInDirectory(arg, Path.Join(Path.GetDirectoryName(arg), "EPL"));
                     }
                     else
                     {
@@ -48,34 +49,74 @@ namespace BetterEPLInjector
                 Path.GetExtension(x).Equals(".gmd", StringComparison.OrdinalIgnoreCase)
             );
 
+            logStream = File.CreateText(output + ".log");
+
             foreach (var file in _files)
             {
                 try
                 {
                     ExtractEmbeds(file, output);
+                    logStream.WriteLine("==================\n");
                 }
                 catch { Console.WriteLine($"failed to extract {file}"); }
             }
+
+            logStream.Close();
         }
 
         static void ExtractEmbeds(string inputResource, string outputFolder)
         {
+            logStream?.WriteLine(Path.GetFileName(inputResource));
+
+            Console.WriteLine($"Attempting to extract {inputResource}");
             var extension = Path.GetExtension(inputResource).ToLower();
 
-            string magic;
-            if (extension == ".epl" || extension == ".bed") magic = "GFS0";
-            else if (extension == ".ept" || extension == ".epd") magic = "DDS ";
+            if (extension == ".epl")
+            {
+                ExtractEffectEmbeds(inputResource, outputFolder, "GFS0");
+                //ExtractEffectEmbeds(inputResource, outputFolder, "DDS ");
+            }
+            else if (extension == ".ept" || extension == ".epd")
+            {
+                ExtractEffectEmbeds(inputResource, outputFolder, "DDS ");
+            }
             else if (extension == ".gfs" || extension == ".gmd")
             {
                 ExtractEmbedsFromModel(inputResource, outputFolder);
-                return;
+            }
+            else if (extension == ".bed")
+            {
+                ExtractEffectEmbeds(inputResource, outputFolder, "GFS0");
+                //ExtractEmbedsFromBed(inputResource, outputFolder);
+                //return;
             }
             else
             {
-                Console.WriteLine("Invalid filetype");
-                return;
+                Console.WriteLine($"Invalid filetype: {extension}");
             }
+        }
 
+        static void ExtractEmbedsFromModel(string modelPath, string outputFolder)
+        {
+            try
+            {
+                var model = Resource.Load<ModelPack>(modelPath);
+
+                if (model == null || model.Model == null)
+                    return;
+
+                ExtractEplFromModelNode(model.Model.RootNode, outputFolder);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.ToString());
+                Console.WriteLine("Failed to extract model");
+            }
+        }
+
+        static void ExtractEffectEmbeds(string inputResource, string outputFolder, string magic)
+        {
+            Console.WriteLine(inputResource);
             Console.WriteLine($"{Path.GetExtension(inputResource)} detected, looking for embeds to extract...\n");
 
             var eplBytes = File.ReadAllBytes(inputResource);
@@ -97,29 +138,9 @@ namespace BetterEPLInjector
                     stream.Write(eplBytes.AsSpan()[offset..(offset + size)]);
                 }
 
-                ExtractEmbeds(newEmbedPath, outputFolder);
+                ExtractEmbeds(newEmbedPath, Path.Join(Path.GetDirectoryName(newEmbedPath), Path.GetFileNameWithoutExtension(newEmbedPath)));
 
                 Console.WriteLine($"Extracted {name}");
-            }
-
-            return;
-        }
-
-        static void ExtractEmbedsFromModel(string modelPath, string outputFolder)
-        {
-            try
-            {
-                var model = Resource.Load<ModelPack>(modelPath);
-
-                if (model == null || model.Model == null)
-                    return;
-
-                ExtractEplFromModelNode(model.Model.RootNode, outputFolder);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine(ex.ToString());
-                Console.WriteLine("Failed to extract model");
             }
         }
 
@@ -149,7 +170,7 @@ namespace BetterEPLInjector
             }
         }
 
-        static void InjectEffectEmbeds(string extractedFiles)
+        static void InjectEmbeds(string extractedFiles)
         {
             Console.WriteLine("Looking for embeds to inject...\n");
 
@@ -163,6 +184,36 @@ namespace BetterEPLInjector
                 return;
             };
 
+            var resourceExtension = Path.GetExtension(outputResource);
+
+            // Recursively inject nested files
+            foreach (var nestedFile in nestedFiles)
+            {
+                InjectEmbeds(nestedFile);
+            }
+
+            if (resourceExtension == ".GFS" || resourceExtension == ".GMD")
+            {
+                Console.WriteLine($"{string.Concat(extractedFiles, resourceExtension)}: Model Injection not currently supported");
+                //InjectModelEmbeds(extractedFiles, outputResource);
+            }
+            else
+            {
+                InjectEffectEmbeds(extractedFiles, outputResource, magic);
+            }
+        }
+
+        static void InjectModelIntoNode(Node node, HashSet<string> files)
+        {
+
+            foreach (var child in node.Children)
+            {
+                InjectModelIntoNode(child, files);
+            }
+        }
+
+        static void InjectEffectEmbeds(string extractedFiles, string outputResource, string magic)
+        {
             byte[] eplBytes = File.ReadAllBytes(outputResource);
             var foundEmbeds = TryFindEmbeds(eplBytes, magic, out var modelEntryList);
 
@@ -170,12 +221,6 @@ namespace BetterEPLInjector
             {
                 Console.WriteLine("Couldn't find embeds in original file.");
                 return;
-            }
-
-            // Recursively inject nested files
-            foreach (var nestedFile in nestedFiles)
-            {
-                InjectEffectEmbeds(nestedFile);
             }
 
             int currentOffset = 0;
@@ -253,6 +298,22 @@ namespace BetterEPLInjector
                         continue;
                     }
 
+                    // Skip Textures that are part of models
+                    if (magic == "DDS ")
+                    {
+                        const int DDS_EXTENSION = 778331251;
+
+                        resourceStream.Seek(-20, SeekOrigin.Current);
+                        var ext = resourceReader.ReadInt32();
+                        resourceStream.Seek(16, SeekOrigin.Current);
+
+                        if (ext != DDS_EXTENSION)
+                        {
+                            currentOffset = embedOffset += 4;
+                            continue;
+                        }
+                    }
+
                     /* Find file name */
                     byte x;
 
@@ -280,7 +341,7 @@ namespace BetterEPLInjector
 
         static bool TryFindOriginalResourceFile(string extractedFilesDirectory, out string resourceFilePath, out string magicPattern)
         {
-            (string, string)[] extensions = [(".EPL", "GFS0"), (".BED", "GFS0"), (".EPT", "DDS "), (".EPD", "DDS ")];
+            (string, string)[] extensions = [(".EPL", "GFS0"), (".BED", "GFS0"), (".EPT", "DDS "), (".EPD", "DDS "), (".GFS", "GFS0"), (".GMD", "GFS0")];
 
             resourceFilePath = string.Empty;
             magicPattern = string.Empty;
