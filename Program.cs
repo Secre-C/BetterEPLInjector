@@ -9,6 +9,7 @@ namespace BetterEPLInjector
     internal class Program
     {
         static StreamWriter? logStream = null;
+        static string OutputFolder = string.Empty;
         static void Main(string[] args)
         {
             if (args.Length == 0)
@@ -66,6 +67,7 @@ namespace BetterEPLInjector
 
         static void ExtractEmbeds(string inputResource, string outputFolder)
         {
+            OutputFolder = outputFolder;
             logStream?.WriteLine(Path.GetFileName(inputResource));
 
             Console.WriteLine($"Attempting to extract {inputResource}");
@@ -74,7 +76,7 @@ namespace BetterEPLInjector
             if (extension == ".epl")
             {
                 ExtractEffectEmbeds(inputResource, outputFolder, "GFS0");
-                //ExtractEffectEmbeds(inputResource, outputFolder, "DDS ");
+                ExtractEffectEmbeds(inputResource, outputFolder, "DDS ");
             }
             else if (extension == ".ept" || extension == ".epd")
             {
@@ -105,7 +107,8 @@ namespace BetterEPLInjector
                 if (model == null || model.Model == null)
                     return;
 
-                ExtractEplFromModelNode(model.Model.RootNode, outputFolder);
+                outputFolder = Path.Join(outputFolder, "ExtractedModels", Path.GetFileNameWithoutExtension(modelPath));
+                ExtractEmbedFromModelNode(model.Model.RootNode, outputFolder);
             }
             catch (Exception ex)
             {
@@ -144,7 +147,7 @@ namespace BetterEPLInjector
             }
         }
 
-        static void ExtractEplFromModelNode(Node node, string outputFolder)
+        static void ExtractEmbedFromModelNode(Node node, string outputFolder)
         {
             foreach (var attachment in node.Attachments)
             {
@@ -160,13 +163,16 @@ namespace BetterEPLInjector
                 }
                 else continue;
 
+                if (!Directory.Exists(outputFolder))
+                    Directory.CreateDirectory(outputFolder);
+
                 attachment.GetValue().Save(outFile);
-                ExtractEmbeds(outFile, outputFolder);
+                ExtractEmbeds(outFile, OutputFolder);
             }
 
             foreach (var child in node.Children)
             {
-                ExtractEplFromModelNode(child, outputFolder);
+                ExtractEmbedFromModelNode(child, outputFolder);
             }
         }
 
