@@ -19,6 +19,14 @@ namespace BetterEPLInjector
             }
             else
             {
+                bool extract = false;
+
+                if (args[0].ToLower() == "extract")
+                {
+                    extract = true;
+                    args = args[1..];
+                }
+
                 foreach (var arg in args)
                 {
                     if (File.Exists(arg))
@@ -27,8 +35,10 @@ namespace BetterEPLInjector
                     }
                     else if (Directory.Exists(arg))
                     {
-                        InjectEmbeds(arg);
-                        //ExtractInDirectory(arg, Path.Join(Path.GetDirectoryName(arg), "EPL"));
+                        if (extract)
+                            ExtractInDirectory(arg, Path.Join(Path.GetDirectoryName(arg), "EPL"));
+                        else
+                            InjectEmbeds(arg);
                     }
                     else
                     {
